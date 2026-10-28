@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#101923"><title>HDCameraPro · Beta local</title>
+  <style>
+    :root{color-scheme:dark;font:15px system-ui,-apple-system,"Segoe UI",sans-serif;background:#0d141b;color:#e8eef5}
+    *{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;grid-template-rows:auto 1fr auto}
+    header,footer{padding:12px 18px;background:#151f2a;display:flex;gap:10px;align-items:center;flex-wrap:wrap;border-bottom:1px solid #263444}
+    footer{border-top:1px solid #263444;border-bottom:0}h1{font-size:17px;margin:0 8px 0 0}.brand{color:#8cc8ff}.status{color:#afbdcb;flex:1;min-width:240px}.dot{width:9px;height:9px;border-radius:50%;background:#d39435;box-shadow:0 0 0 3px #d3943522}
+    main{display:grid;grid-template-rows:auto 1fr;gap:10px;padding:14px;overflow:auto}.lan-panel{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:10px 12px;border:1px solid #2e4052;border-radius:9px;background:#121e29}.lan-title{font-weight:600}.lan-results{display:flex;gap:8px;flex-wrap:wrap}.lan-device{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:5px 9px;border-radius:7px;background:#203648;color:#cce8ff;font-size:13px}.lan-auth{display:flex;align-items:center;gap:7px;flex-wrap:wrap}.lan-auth input{width:180px;border:1px solid #3a4a5a;border-radius:7px;padding:8px;background:#14202b;color:#e8eef5;font:inherit}.lan-auth small{flex-basis:100%}.lan-note{color:#a5b2c0;font-size:13px}.view{position:relative;display:grid;place-items:center;width:100%;height:100%;min-height:220px;background:#05080b;border:1px solid #25313d;border-radius:10px;overflow:hidden}
+    #screen{display:block;max-width:100%;max-height:calc(100vh - 150px);object-fit:contain;cursor:crosshair;touch-action:none;user-select:none;-webkit-user-drag:none}.overlay{position:absolute;inset:0;display:grid;place-items:center;color:#94a3b2;pointer-events:none;text-align:center;padding:24px}
+    button,select{border:1px solid #3a4a5a;border-radius:7px;padding:8px 11px;background:#202d3a;color:#e8eef5;font:inherit}button{cursor:pointer}button.primary{background:#176fc0;border-color:#2686dc}button:hover{filter:brightness(1.12)}button:disabled{opacity:.55;cursor:wait}select{min-width:130px}small{color:#a5b2c0}.tag{font-size:12px;padding:4px 8px;border-radius:12px;background:#263444;color:#b9cce0}
+    @media(max-width:600px){header,footer{padding:10px}.status{min-width:100%}main{padding:7px}.view{min-height:180px}}
+  </style>
+</head>
+<body>
+  <header><h1><span class="brand">HDCameraPro</span> · Beta local</h1><span class="dot" id="dot"></span><span class="status" id="status">Conectando con ADB…</span><select id="devices" aria-label="Teléfono conectado" hidden></select><button id="refresh">Actualizar</button></header>
+  <main><section class="lan-panel"><button class="primary" id="discover">Buscar cámara en LAN</button><span class="lan-note" id="lanStatus">Búsqueda directa desde la laptop; no necesita el teléfono.</span><div class="lan-results" id="lanResults" aria-live="polite"></div></section><div class="view"><img id="screen" src="/stream.mjpg" alt="Pantalla del teléfono Android"><div class="overlay" id="overlay">Conecta el Android por USB, autoriza ADB y abre la vista de cámara.</div></div></main>
+  <footer><button class="primary" id="open">Abrir HDCameraPro</button><button id="openBridge">Abrir puente</button><button id="back">Atrás</button><button id="home">Inicio</button><span class="tag" id="resolution">—</span><small id="action" role="status">Toca o arrastra sobre la imagen para controlar el teléfono.</small><small id="hint">Control requiere el companion Android y su servicio de accesibilidad activo.</small></footer>
+    <script>
+    const img=document.querySelector('#screen'),label=document.querySelector('#status'),dot=document.querySelector('#dot'),overlay=document.querySelector('#overlay'),devices=document.querySelector('#devices'),action=document.querySelector('#action');
+    async function api(path,body){const r=await fetch(path,{method:body?'POST':'GET',headers:body?{'Content-Type':'application/json'}:{},body:body?JSON.stringify(body):undefined,cache:'no-store'});const data=await r.json();if(!r.ok){const error=new Error(data.error||'Error del backend');error.details=data;throw error;}return data;}
+    let checking=false,directVideo=false,directVideoPoll=null;
+    function watchDirectVideo(sessionId,out){
+      if(directVideoPoll)clearInterval(directVideoPoll);
+      directVideo=true;img.style.cursor='default';overlay.hidden=false;overlay.textContent='Esperando cuadros directos de la cámara…';
+      img.src=`/api/lan/video.mjpg?id=${encodeURIComponent(sessionId)}&t=${Date.now()}`;
+      directVideoPoll=setInterval(async()=>{
+        try{
+          const state=await api(`/api/lan/video/status?id=${encodeURIComponent(sessionId)}`),v=state.video;
+          const idleMs=v?.videoIdleMs;
+          if(state.state==='iotc-session-closed'){
+            overlay.hidden=false;overlay.style.display='grid';overlay.textContent='La cámara cerró la sesión IOTC.';
+          }else if(idleMs>5000){
+            overlay.hidden=false;overlay.style.display='grid';overlay.textContent=`Video detenido: no llegan cuadros hace ${Math.floor(idleMs/1000)} s.`;
+          }else if(v?.jpegFrames>0){overlay.hidden=true;overlay.style.display='none';}
+          const confirmed=(v?.acknowledgedControls||[]).map(c=>c.command).join(', ');
+          const candidateText=(v?.candidateDatagrams||0)>0?` candidatos AV: ${v.candidateDatagrams}, token rechazado: ${v.rejectedSessionToken||0}, formato rechazado: ${v.rejectedVideoLayout||0}.`:'';
+          const noFrames=(v?.fragments||0)===0?(v?.rejectedSessionToken>0?' El receptor encontró paquetes de video, pero rechazó su token de sesión.':' La sesión AV sigue abierta, pero no se han aceptado fragmentos de video.'):'';
+          const idleText=idleMs>5000?` Sin cuadros nuevos hace ${Math.floor(idleMs/1000)} s.`:'';
+          const videoAckText=(v?.videoAcksSent||0)>0?` Acuses de fragmentos: ${v.videoAcksSent} enviados; respuestas IOTC 0x0408: ${v.videoAckReplies||0} con token coincidente, ${v.videoAckReplyPackets||0} tipo 9, ${v.videoAckReplyCandidates||0} paquetes 0x0408 observados${v.videoAckErrors?`, ${v.videoAckErrors} fallidos`:''}.`:'';
+          const qualityNames={1:'4K',3:'2K',5:'1080p'};
+          const videoInfo=` H.264: ${v?.h264Resolution||'resolución aún no detectada'}; salida web: ${v?.outputFps||0} fps${v?.requestedQuality?`; selector web: ${qualityNames[v.requestedQuality]||v.requestedQuality}`:''}.`;
+          out.textContent=`Video directo: modo ${v?.streamMode??'—'}, ${v?.jpegFrames||0} imagen(es), ${v?.assembledFrames||0} cuadros reensamblados, ${v?.fragments||0} fragmentos.${videoInfo}${confirmed?` Controles con acuse: ${confirmed}.`:''}${videoAckText}${candidateText}${noFrames}${idleText}${state.state==='iotc-session-closed'?' La cámara cerró la sesión IOTC.':''}${v?.ffmpegError?` ${v.ffmpegError}`:''}`;
+        }catch(error){clearInterval(directVideoPoll);directVideoPoll=null;out.textContent=`Se perdió la sesión de video: ${error.message}`;}
+      },1000);
+    }
+    async function check(){if(checking)return;checking=true;try{const s=await api('/api/status');devices.hidden=!(s.devices&&s.devices.length>1);if(!devices.hidden){const old=devices.value;devices.replaceChildren(...s.devices.map(serial=>{const o=document.createElement('option');o.value=serial;o.textContent=serial;return o}));if(s.serial)devices.value=s.serial;else if(old&&s.devices.includes(old))devices.value=old;}
+      dot.style.background=s.connected?(s.controlReady?'#36bd78':'#d39435'):'#d39435';label.textContent=s.connected?`Android ${s.serial}${s.controlReady?' · control listo':' · revisa el puente Android'}`:s.message;document.querySelector('#resolution').textContent=s.width?`${s.width} × ${s.height}`:'—';
+      overlay.hidden=Boolean(s.connected&&lastImage);if(s.captureError)label.textContent=`${label.textContent} · ${s.captureError}`;
+    }catch(e){label.textContent=e.message;dot.style.background='#e05a5a';}finally{checking=false;}}
+    let lastImage=false;img.addEventListener('load',()=>{lastImage=true;if(!directVideo)overlay.hidden=true;});img.addEventListener('error',()=>{overlay.hidden=false;overlay.textContent=directVideo?'No llega imagen directa; revisa el contador de cuadros y FFmpeg.':'No llega imagen. Revisa USB, autorización ADB y conexión del teléfono.';});
+    devices.addEventListener('change',async()=>{try{await api('/api/device',{serial:devices.value});await check();}catch(e){label.textContent=e.message;}});
+    document.querySelector('#refresh').onclick=check;
+    document.querySelector('#discover').onclick=async e=>{
+      const b=e.currentTarget,out=document.querySelector('#lanStatus'),results=document.querySelector('#lanResults');
+      b.disabled=true;results.replaceChildren();out.textContent='Buscando respuestas IOTC en la red local…';
+      try{
+        const r=await api('/api/lan/discover',{});
+        out.textContent=`Interfaz ${r.localIp} · ${r.sent} sondas · ${r.devices.length} dispositivo(s) detectado(s).`;
+        for(const d of r.devices){
+          const item=document.createElement('div');item.className='lan-device';
+          const name=document.createElement('span');name.textContent=`${d.ip}:${d.port} · ${d.response}`;
+          const connect=document.createElement('button');connect.type='button';connect.textContent='Conectar y ver video';
+          const quality=document.createElement('select');quality.setAttribute('aria-label','Calidad del video');quality.hidden=true;
+          for(const [value,label] of [[1,'4K'],[3,'2K'],[5,'1080p']]){const option=document.createElement('option');option.value=String(value);option.textContent=label;quality.append(option);}
+          const applyQuality=document.createElement('button');applyQuality.type='button';applyQuality.textContent='Aplicar calidad';applyQuality.hidden=true;
+          let activeSessionId='';
+          applyQuality.onclick=async()=>{
+            applyQuality.disabled=true;connect.disabled=true;out.textContent=`Solicitando calidad ${quality.selectedOptions[0]?.textContent||''}…`;
+            try{const result=await api('/api/lan/video/quality',{sessionId:activeSessionId,quality:Number(quality.value)});out.textContent=result.message;}
+            catch(err){out.textContent=`No se pudo cambiar la calidad: ${err.message}`;}
+            finally{applyQuality.disabled=false;connect.disabled=false;}
+          };
+          const note=document.createElement('small');note.textContent='Usa la cuenta y contraseña guardadas localmente en backend-local/.env.';
+          let audioProbe;
+          if(r.audioProbeAvailable){
+            audioProbe=document.createElement('button');audioProbe.type='button';audioProbe.textContent='Prueba puntual de audio (1 s)';
+            audioProbe.title='Prueba autorizada: AUDIOSTART, consulta infrarroja, descarte de audio y AUDIOSTOP.';
+            audioProbe.onclick=async()=>{
+              audioProbe.disabled=true;connect.disabled=true;out.textContent='Ejecutando una sola prueba de 1 segundo; se descarta el audio y luego se cierra la sesión…';
+              try{
+                const result=await api('/api/lan/audio-sequence-probe',{deviceId:d.deviceId}),p=result.probe;
+                out.textContent=`Prueba completada: AUDIOSTOP enviado=${p.audioStopSent}; fragmentos ${p.fragmentsBefore} → ${p.fragmentsAfter}; cuadros ${p.framesBefore} → ${p.framesAfter}; JPEG ${p.jpegBefore} → ${p.jpegAfter}.`;
+                audioProbe.textContent='Prueba realizada';
+              }catch(err){
+                const p=err.details?.diagnostics?.video,ack=err.details?.diagnostics?.lastAvIoCtrlAck;
+                out.textContent=`Prueba detenida: ${err.message}${ack?` Último acuse: interno ${ack.ioCtrlSequence}${ack.command?`, comando ${ack.command}`:''}${ack.outerSequenceMatched===false?' (secuencia externa distinta)':''}.`:''}${p?` Video: ${p.fragments||0} fragmentos, ${p.assembledFrames||0} cuadros.`:''}`;
+                audioProbe.textContent='Prueba realizada';
+              }finally{connect.disabled=false;}
+            };
+          }
+          connect.onclick=async()=>{
+            connect.disabled=true;out.textContent=`Solicitando pre-sesión con ${d.ip}…`;
+            try{
+              const s=await api('/api/lan/connect',{deviceId:d.deviceId});
+              activeSessionId=s.sessionId;quality.hidden=false;applyQuality.hidden=false;
+              out.textContent=s.message;connect.textContent='Cámara conectada';
+              watchDirectVideo(s.sessionId,out);
+            }catch(err){const diag=err.details?.diagnostics,events=diag?.events||[],trace=events.slice(-5).map(x=>`${x.type}/${x.command}${x.ioCtrlCommand?` IOCTRL ${x.ioCtrlCommand}`:''}${x.streamStatus!==undefined?` estado ${x.streamStatus} modo ${x.streamMode}`:''}${x.avClass!==undefined?` AV clase ${x.avClass}/marcador 0x${Number(x.avMarker).toString(16)}/tipo ${x.avType}`:''}${x.ioCtrlSequence!==undefined?` seq AVIOCTRL ${x.ioCtrlSequence}`:''}${x.avStatus!==undefined?` estado AV ${x.avStatus}, modo ${x.avMode}`:''}${x.sessionIdMatch===true?' ID coincide':x.sessionIdMatch===false?' ID no coincide':''}${x.peerPort?` peer ${x.peerPort}`:''} ${x.length} B`).join('; '),ack=diag?.lastAvIoCtrlAck,ackTrace=ack?` Último acuse AVIOCTRL: seq interna ${ack.ioCtrlSequence}${ack.command?`, comando ${ack.command}`:''}, ${ack.matchedPending?'correlacionado':'sin solicitud pendiente'}${ack.outerSequenceMatched===false?' (secuencia IOTC externa distinta)':''}.`:'';out.textContent=`Conexión directa no completada: ${err.message}${ackTrace}${trace?` Tráfico observado: ${trace}.`:''}`;connect.textContent='Reintentar conexión';connect.disabled=false;}
+          };
+          item.append(name,connect,quality,applyQuality);if(audioProbe)item.append(audioProbe);item.append(note);results.append(item);
+        }
+        if(!r.devices.length)out.textContent+=' Revisa que la cámara esté encendida y que la laptop use la misma LAN.';
+      }catch(err){out.textContent=`No se pudo buscar: ${err.message}`;}
+      finally{b.disabled=false;}
+    };
+    function point(clientX,clientY){const r=img.getBoundingClientRect();if(!img.naturalWidth||!r.width||!r.height)return null;const scale=Math.min(r.width/img.naturalWidth,r.height/img.naturalHeight),w=img.naturalWidth*scale,h=img.naturalHeight*scale,left=r.left+(r.width-w)/2,top=r.top+(r.height-h)/2;if(clientX<left||clientX>left+w||clientY<top||clientY>top+h)return null;return{x:Math.max(0,Math.min(img.naturalWidth-1,Math.round((clientX-left)/scale))),y:Math.max(0,Math.min(img.naturalHeight-1,Math.round((clientY-top)/scale)))}}
+    img.draggable=false;let pointerStart=null;img.addEventListener('pointerdown',e=>{if(directVideo||e.button!==0)return;const p=point(e.clientX,e.clientY);if(!p)return;pointerStart={...p,clientX:e.clientX,clientY:e.clientY,pointerId:e.pointerId};img.setPointerCapture(e.pointerId);});
+    img.addEventListener('pointerup',async e=>{if(directVideo||!pointerStart)return;const start=pointerStart;pointerStart=null;const end=point(e.clientX,e.clientY);if(!end)return;const isSwipe=Math.hypot(e.clientX-start.clientX,e.clientY-start.clientY)>10;try{if(isSwipe){await api('/api/swipe',{x1:start.x,y1:start.y,x2:end.x,y2:end.y,duration:350});action.textContent=`Gesto enviado (${start.x},${start.y}) → (${end.x},${end.y}).`;}else{const result=await api('/api/tap',{x:end.x,y:end.y});action.textContent=`Toque enviado a ${result.serial}: (${result.x}, ${result.y}) en ${result.width}×${result.height}.`;}}catch(err){action.textContent=`Fallo del control: ${err.message}`;}});
+    img.addEventListener('pointercancel',()=>{pointerStart=null;});
+    async function key(key){try{await api('/api/key',{key});action.textContent=`Comando ${key==='back'?'Atrás':'Inicio'} enviado al teléfono.`;}catch(e){action.textContent=`Fallo del control: ${e.message}`;}}
+    document.querySelector('#back').onclick=()=>key('back');document.querySelector('#home').onclick=()=>key('home');
+    document.querySelector('#open').onclick=async e=>{const b=e.currentTarget;b.disabled=true;try{await api('/api/open',{});action.textContent='Solicitud de apertura enviada al Android.';setTimeout(check,1500);}catch(err){action.textContent=`No se pudo abrir la app: ${err.message}`;}finally{b.disabled=false;}};
+    document.querySelector('#openBridge').onclick=async e=>{const b=e.currentTarget;b.disabled=true;try{await api('/api/open-bridge',{});action.textContent='Puente abierto. Activa su servicio de accesibilidad desde Ajustes de Android.';setTimeout(check,1500);}catch(err){action.textContent=`No se pudo abrir el puente: ${err.message}`;}finally{b.disabled=false;}};
+    check();setInterval(check,10000);
+  </script>
+</body>
+</html>

@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">Control local HDCameraPro</string>
+    <string name="service_description">Permite controlar el teléfono desde la beta local de la laptop usando gestos de accesibilidad por USB.</string>
+</resources>

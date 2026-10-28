@@ -1,0 +1,40 @@
+# Credenciales locales. Mantener .env.example versionado.
+**/.env
+
+# Dependencias y salidas generadas.
+**/node_modules/
+**/build/
+**/.gradle/
+**/captures/
+*.pcap
+*.pcapng
+*.h264
+*.mp4
+*.mjpeg
+*.apk
+
+# Material local de análisis de APK y capturas, no requerido para ejecutar la beta.
+/adx_correcto/
+/analisis_nativo/
+/apk_extraido/
+/wireshark/
+/hallazgos.txt
+
+# Herramientas y notas de análisis offline; no se necesitan para ejecutar la beta.
+/backend-local/PROTOCOL_NOTES.md
+/backend-local/ghidra-scripts/
+/backend-local/capture-av-diag.js
+/backend-local/diff-iotc-frames.js
+/backend-local/inspect-av-sequence.js
+/backend-local/inspect-iotc-control.js
+/backend-local/inspect-iotc-datagram.js
+/backend-local/inspect-iotc-handshake.js
+/backend-local/inspect-iotc-pcap.js
+/backend-local/lan-discovery-probe.js
+/backend-local/verify-iotc-transform.js
+
+# Proyecto Android extraído/auxiliar del nivel raíz; el companion mantenido está bajo backend-local.
+/app/
+/build.gradle
+/settings.gradle
+/settings.gradle.kts
